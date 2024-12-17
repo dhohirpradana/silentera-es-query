@@ -30,11 +30,14 @@ def calculate_wind_speed(u_component, v_component):
     return math.sqrt(u_component**2 + v_component**2)
 
 # Fungsi untuk menghitung arah angin
+
+
 def calculate_wind_direction(u_component, v_component):
     """
     Calculate the wind direction in radians using atan2 function.
     """
     return math.atan2(-u_component, -v_component)  # Arah Angin = atan2(-UGRD, -VGRD)
+
 
 def query_with_recursive_radius(es_client, index_name, latitude, longitude, starttime, endtime):
     """
@@ -63,13 +66,13 @@ def query_with_recursive_radius(es_client, index_name, latitude, longitude, star
                 {"timestamp": {"order": "asc"}}
             ]
         }
-        
+
         # Execute the query
         response = es_client.search(index=index_name, body=query, size=1000)
-        
+
         hits = response.get("hits", {}).get("hits", [])
         doc_count = len(hits)
-        
+
         if hits:
             # Data found, extract required details
             data_found = True
@@ -88,16 +91,18 @@ def query_with_recursive_radius(es_client, index_name, latitude, longitude, star
             result["data"] = [
                 {
                     "datetime": datetime,
-                    "value": sum(values) / len(values)  # Averaging duplicate values (or just taking the first one)
+                    # Averaging duplicate values (or just taking the first one)
+                    "value": sum(values) / len(values)
                 }
                 for datetime, values in unique_data.items()
             ]
             break  # Stop searching as data is found
-    
+
     if not data_found:
         result["message"] = "No data found within the 50km radius."
-    
+
     return result
+
 
 # Mapping of type to corresponding CSV file
 TYPE_TO_FILE_MAPPING = {
@@ -116,6 +121,7 @@ TYPE_TO_FILE_MAPPING = {
     "GUST": "wind_speed_(gust)"
 }
 
+
 @app.route('/query', methods=['POST'])
 def query_data():
     """
@@ -133,29 +139,31 @@ def query_data():
         # Parse input JSON
         data = request.get_json()
         index_name = data.get("type")
-        
+
         # Validate 'type' input
         if index_name not in TYPE_TO_FILE_MAPPING:
             return jsonify({"error": f"Invalid type. Allowed values are: {', '.join(TYPE_TO_FILE_MAPPING.keys())}"}), 400
-        
+
         # Get the corresponding CSV file for the type
         csv_file = TYPE_TO_FILE_MAPPING[index_name]
-        
+
         latitude = float(data.get("latitude"))
         longitude = float(data.get("longitude"))
         starttime = data.get("starttime")
         endtime = data.get("endtime")
-        
+
         # Validate required fields
         if not all([index_name, latitude, longitude, starttime, endtime]):
             return jsonify({"error": "Missing required fields"}), 400
-        
+
         # Jika tipe adalah UGRD, hitung kecepatan angin
         if index_name == "UGRD":
             # Ambil data dari komponen UGRD dan VGRD
-            u_component_data = query_with_recursive_radius(es_client, "10_metre_u_wind_component", latitude, longitude, starttime, endtime)
-            v_component_data = query_with_recursive_radius(es_client, "10_metre_v_wind_component", latitude, longitude, starttime, endtime)
-            
+            u_component_data = query_with_recursive_radius(
+                es_client, "10_metre_u_wind_component", latitude, longitude, starttime, endtime)
+            v_component_data = query_with_recursive_radius(
+                es_client, "10_metre_v_wind_component", latitude, longitude, starttime, endtime)
+
             # Hitung arah angin menggunakan data komponen UGRD dan VGRD
             if u_component_data['data'] and v_component_data['data']:
                 wind_speeds = [
@@ -168,13 +176,15 @@ def query_data():
                 return jsonify({"location": {"lat": latitude, "lon": longitude}, "radius": 5, "data": wind_speeds, "count": len(wind_speeds)}), 200
             else:
                 return jsonify({"error": "Data for UGRD or VGRD components not found."}), 404
-            
+
         # Jika tipe adalah VGRD, hitung arah angin
         if index_name == "UGRD" or index_name == "VGRD":
             # Ambil data dari komponen UGRD dan VGRD
-            u_component_data = query_with_recursive_radius(es_client, "10_metre_u_wind_component", latitude, longitude, starttime, endtime)
-            v_component_data = query_with_recursive_radius(es_client, "10_metre_v_wind_component", latitude, longitude, starttime, endtime)
-            
+            u_component_data = query_with_recursive_radius(
+                es_client, "10_metre_u_wind_component", latitude, longitude, starttime, endtime)
+            v_component_data = query_with_recursive_radius(
+                es_client, "10_metre_v_wind_component", latitude, longitude, starttime, endtime)
+
             # Hitung arah angin menggunakan data komponen UGRD dan VGRD
             if u_component_data['data'] and v_component_data['data']:
                 wind_directions = [
@@ -188,18 +198,38 @@ def query_data():
             else:
                 return jsonify({"error": "Data for UGRD or VGRD components not found."}), 404
 
+        if index_name == "PV":
+            ghi = query_with_recursive_radius(
+                es_client, "downward_short-wave_radiation_flux", latitude, longitude, starttime, endtime)
+            print(ghi['data'])
+
+            if ghi['data']:
+                pvs = [
+                    {
+                        "datetime": item["datetime"],
+                        "value": 0.3 * int(item["value"])
+                    }
+                    for item in ghi['data']
+                ]
+                return jsonify({"location": {"lat": latitude, "lon": longitude}, "data": pvs, "count": len(pvs)}), 200
+            else:
+                return jsonify({"error": "Data for UGRD or VGRD components not found."}), 404
+
         # Query Elasticsearch untuk tipe lain
-        result = query_with_recursive_radius(es_client, csv_file, latitude, longitude, starttime, endtime)
-        
+        result = query_with_recursive_radius(
+            es_client, csv_file, latitude, longitude, starttime, endtime)
+
         return jsonify(result), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/')
 def home():
     """Home endpoint."""
     return "Elasticsearch Query API is running. Use '/query' endpoint to query data."
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
